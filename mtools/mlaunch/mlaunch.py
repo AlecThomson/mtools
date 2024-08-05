@@ -59,7 +59,7 @@ class MongoConnection(Connection):
         Connection.__init__(self, *args, **kwargs)
 
 
-def wait_for_host(port, interval=1, timeout=30, to_start=True, queue=None,
+def wait_for_host(port, hostname="localhost", interval=1, timeout=30, to_start=True, queue=None,
                   ssl_pymongo_options=None, tls_pymongo_options=None):
     """
     Ping server and wait for response.
@@ -72,7 +72,7 @@ def wait_for_host(port, interval=1, timeout=30, to_start=True, queue=None,
     If queue is provided, it will place the results in the message queue and
     return, otherwise it will just return the result directly.
     """
-    host = 'localhost:%i' % port
+    host = '%s:%i' % (hostname, port)
     start_time = time.time()
     while True:
         if (time.time() - start_time) > timeout:
@@ -101,13 +101,13 @@ def wait_for_host(port, interval=1, timeout=30, to_start=True, queue=None,
                 return True
 
 
-def shutdown_host(port, username=None, password=None, authdb=None):
+def shutdown_host(port, hostname="localhost", username=None, password=None, authdb=None):
     """
     Send the shutdown command to a mongod or mongos on given port.
 
     This function can be called as a separate thread.
     """
-    host = 'localhost:%i' % port
+    host = '%s:%i' % (hostname, port)
     try:
         if username and password and authdb:
             if authdb != "admin":
@@ -644,6 +644,11 @@ class MLaunchTool(BaseCmdLineTool):
         else:
             first_init = True
 
+        if self.args['hostname']:
+            self.hostname = self.args['hostname']
+        else:
+            self.hostname = 'localhost'
+
         self.ssl_pymongo_options = self._get_ssl_pymongo_options(self.args)
         self.tls_pymongo_options = self._get_tls_pymongo_options(self.args)
 
@@ -751,7 +756,8 @@ class MLaunchTool(BaseCmdLineTool):
             if first_init:
                 # add shards
                 mongos = sorted(self.get_tagged(['mongos']))
-                con = self.client('localhost:%i' % mongos[0])
+                host = '%s:%i' % (self.hostname, mongos[0])
+                con = self.client(host)
 
                 shards_to_add = len(self.shard_connection_str)
                 nshards = con['config']['shards'].count_documents({})
@@ -871,7 +877,8 @@ class MLaunchTool(BaseCmdLineTool):
         # in sharded env, if --mongos 0, kill the dummy mongos
         if self.args['sharded'] and self.args['mongos'] == 0:
             port = self.args['port']
-            print("shutting down temporary mongos on localhost:%s" % port)
+            host = '%s:%i' % (self.hostname, port)
+            print("shutting down temporary mongos on %s" % host)
             username = self.args['username'] if self.args['auth'] else None
             password = self.args['password'] if self.args['auth'] else None
             authdb = self.args['auth_db'] if self.args['auth'] else None
@@ -1312,7 +1319,7 @@ class MLaunchTool(BaseCmdLineTool):
 
                 try:
                     mrsc = self.client(
-                        ','.join('localhost:%i' % i for i in port_range),
+                        ','.join('%s:%i' % (self.hostname, i) for i in port_range),
                         replicaSet=rs_name)
 
                     # primary, secondaries, arbiters
@@ -1351,7 +1358,8 @@ class MLaunchTool(BaseCmdLineTool):
             port = i + current_port
 
             try:
-                mc = self.client('localhost:%i' % port, directConnection=True)
+                host = '%s:%i' % (self.hostname, port)
+                mc = self.client(host, directConnection=True)
                 mc.admin.command('ping')
                 running = True
 
@@ -1370,7 +1378,8 @@ class MLaunchTool(BaseCmdLineTool):
     def is_running(self, port):
         """Return True if a host on a specific port is running."""
         try:
-            con = self.client('localhost:%s' % port, directConnection=True)
+            host = '%s:%i' % (self.hostname, port)
+            con = self.client(host, directConnection=True)
             con.admin.command('ping')
             return True
         except (AutoReconnect, ConnectionFailure, OperationFailure):
@@ -1437,7 +1446,7 @@ class MLaunchTool(BaseCmdLineTool):
 
         for port in ports:
             threads.append(threading.Thread(target=wait_for_host, args=(
-                port, interval, timeout, to_start, queue,
+                port, self.hostname, interval, timeout, to_start, queue,
                 self.ssl_pymongo_options, self.tls_pymongo_options)))
 
         if self.args and 'verbose' in self.args and self.args['verbose']:
@@ -1819,7 +1828,8 @@ class MLaunchTool(BaseCmdLineTool):
                 print('Skipping replica set initialization for %s' % name)
             return
 
-        con = self.client('localhost:%i' % port, directConnection=True)
+        host = '%s:%i' % (self.hostname, port)
+        con = self.client(host, directConnection=True)
         try:
             rs_status = con['admin'].command({'replSetGetStatus': 1})
             return rs_status
@@ -1847,7 +1857,8 @@ class MLaunchTool(BaseCmdLineTool):
                 raise SystemExit(f"replica set '{name}' failed to initialize.")
 
     def _add_user(self, port, name, password, database, roles):
-        con = self.client('localhost:%i' % port, serverSelectionTimeoutMS=10000)
+        host = '%s:%i' % (self.hostname, port)
+        con = self.client(host, serverSelectionTimeoutMS=10000)
 
         if database == "$external":
             password = None
@@ -2023,7 +2034,7 @@ class MLaunchTool(BaseCmdLineTool):
                                    os.path.join(datapath, 'mongod.log'),
                                    portstart + i, replset=name, extra=extra)
 
-            host = '%s:%i' % (self.args['hostname'], portstart + i)
+            host = '%s:%i' % (self.hostname, portstart + i)
             member_config = {
                 '_id': len(self.config_docs[name]['members']),
                 'host': host,
@@ -2047,7 +2058,7 @@ class MLaunchTool(BaseCmdLineTool):
                                    portstart + self.args['nodes'],
                                    replset=name)
 
-            host = '%s:%i' % (self.args['hostname'],
+            host = '%s:%i' % (self.hostname,
                               portstart + self.args['nodes'])
             (self.config_docs[name]['members']
              .append({'_id': len(self.config_docs[name]['members']),
@@ -2083,7 +2094,7 @@ class MLaunchTool(BaseCmdLineTool):
                                os.path.join(datapath, 'mongod.log'), port,
                                replset=None, extra=extra)
 
-        host = '%s:%i' % (self.args['hostname'], port)
+        host = '%s:%i' % (self.hostname, port)
 
         return host
 
@@ -2112,7 +2123,7 @@ class MLaunchTool(BaseCmdLineTool):
             extra += ' --wiredTigerCacheSizeGB 1 '
 
         # Exit with error if hostname is specified but not bind_ip options
-        if (self.args['hostname'] != 'localhost'
+        if (self.hostname != 'localhost'
                 and version.parse(self.current_version) >= version.parse("3.6.0")
                 and (self.args['sharded'] or self.args['replicaset'])
                 and '--bind_ip' not in extra):
